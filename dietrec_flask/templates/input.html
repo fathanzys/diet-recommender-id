@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="bg-slate-50 py-12 min-h-screen">
+  <div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+
+    <div class="text-center mb-10">
+      <h1 class="text-3xl font-extrabold text-slate-900">Buat Profil Gizi Anda</h1>
+      <p class="mt-2 text-slate-600">Isi data di bawah ini agar kami dapat menyusun menu yang pas untuk tubuh Anda.</p>
+    </div>
+
+    <form method="post" class="bg-white rounded-2xl shadow-card border border-slate-100 overflow-hidden">
+
+      <div class="p-8 border-b border-slate-50">
+        <h2 class="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-100 text-brand-600 text-sm">1</span>
+          Informasi Dasar
+        </h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Usia</label>
+            <div class="relative">
+              <input type="number" name="age" value="{{ form.get('age', 25) }}" min="15" max="80" required
+                class="block w-full rounded-lg border-slate-200 bg-slate-50 px-4 py-2.5 text-slate-900 focus:border-brand-500 focus:ring-brand-500 sm:text-sm">
+              <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400 text-sm">th</div>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Jenis Kelamin</label>
+            <select name="sex" class="block w-full rounded-lg border-slate-200 bg-slate-50 px-4 py-2.5 text-slate-900 focus:border-brand-500 focus:ring-brand-500 sm:text-sm">
+              <option value="Laki-laki" {% if form.get('sex')=='Laki-laki' %}selected{% endif %}>Laki-laki</option>
+              <option value="Perempuan" {% if form.get('sex')=='Perempuan' %}selected{% endif %}>Perempuan</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Berat Badan</label>
+            <div class="relative">
+              <input type="number" step="0.1" name="weight" value="{{ form.get('weight', 60) }}" min="30" max="200" required
+                class="block w-full rounded-lg border-slate-200 bg-slate-50 px-4 py-2.5 text-slate-900 focus:border-brand-500 focus:ring-brand-500 sm:text-sm">
+              <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400 text-sm">kg</div>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Tinggi Badan</label>
+            <div class="relative">
+              <input type="number" step="0.1" name="height" value="{{ form.get('height', 170) }}" min="100" max="250" required
+                class="block w-full rounded-lg border-slate-200 bg-slate-50 px-4 py-2.5 text-slate-900 focus:border-brand-500 focus:ring-brand-500 sm:text-sm">
+              <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400 text-sm">cm</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-8 border-b border-slate-50">
+        <h2 class="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 text-sm">2</span>
+          Gaya Hidup & Tujuan
+        </h2>
+        <div class="grid grid-cols-1 gap-6">
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Seberapa aktif Anda?</label>
+            <select name="activity" class="block w-full rounded-lg border-slate-200 bg-slate-50 px-4 py-2.5 text-slate-900 focus:border-brand-500 focus:ring-brand-500 sm:text-sm">
+              <option value="sangat_ringan">Sangat Ringan (Jarang olahraga/Duduk kerja)</option>
+              <option value="ringan">Ringan (Olahraga 1-3x seminggu)</option>
+              <option value="sedang" selected>Sedang (Olahraga 3-5x seminggu)</option>
+              <option value="berat">Berat (Olahraga 6-7x seminggu)</option>
+              <option value="sangat_berat">Sangat Berat (Atlet/Pekerja fisik berat)</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-slate-700">Apa target Anda?</label>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <label class="relative flex cursor-pointer flex-col rounded-xl border border-slate-200 p-4 shadow-sm focus:outline-none has-[:checked]:border-brand-500 has-[:checked]:bg-brand-50 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <input type="radio" name="goal" value="cut" class="sr-only">
+                <span class="flex items-center gap-2 text-sm font-bold text-slate-900">📉 Turun Berat</span>
+                <span class="text-xs text-slate-500 mt-1">Defisit kalori aman</span>
+              </label>
+              <label class="relative flex cursor-pointer flex-col rounded-xl border border-slate-200 p-4 shadow-sm focus:outline-none has-[:checked]:border-brand-500 has-[:checked]:bg-brand-50 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <input type="radio" name="goal" value="maintain" class="sr-only" checked>
+                <span class="flex items-center gap-2 text-sm font-bold text-slate-900">⚖️ Pertahankan</span>
+                <span class="text-xs text-slate-500 mt-1">Jaga berat stabil</span>
+              </label>
+              <label class="relative flex cursor-pointer flex-col rounded-xl border border-slate-200 p-4 shadow-sm focus:outline-none has-[:checked]:border-brand-500 has-[:checked]:bg-brand-50 has-[:checked]:ring-1 has-[:checked]:ring-brand-500">
+                <input type="radio" name="goal" value="bulk" class="sr-only">
+                <span class="flex items-center gap-2 text-sm font-bold text-slate-900">💪 Tambah Berat</span>
+                <span class="text-xs text-slate-500 mt-1">Surplus untuk otot</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-8">
+        <h2 class="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-100 text-orange-600 text-sm">3</span>
+          Preferensi Makanan
+        </h2>
+        <div class="space-y-6">
+          <div class="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50">
+            <div>
+              <span class="block text-sm font-bold text-slate-900">Prioritaskan Makanan Halal</span>
+              <span class="text-xs text-slate-500">Menu non-halal akan otomatis dihapus.</span>
+            </div>
+            <select name="halal" class="rounded-lg border-slate-200 text-sm focus:border-brand-500 focus:ring-brand-500">
+              <option value="ya" selected>Ya, Wajib</option>
+              <option value="tidak">Tidak</option>
+            </select>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            <div class="space-y-1">
+              <label class="text-sm font-medium text-slate-700">Alergi / Pantangan</label>
+              <select id="alergiSelect" name="allergies[]" multiple class="block w-full" placeholder="Cari alergi dari dataset...">
+                {% if allergies_opts %}
+                  {% for opt in allergies_opts %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option value="" disabled>Data Alergi tidak ditemukan di Dataset</option>
+                {% endif %}
+              </select>
+              <p class="text-xs text-slate-500 mt-1">Standar Alergen Pangan (FDA/BPOM).</p>
+            </div>
+
+            <div class="space-y-1">
+              <label class="text-sm font-medium text-slate-700">Kondisi Kesehatan</label>
+              <select id="penyakitSelect" name="diseases[]" multiple class="block w-full" placeholder="Pilih kondisi dari dataset...">
+                {% if diseases_opts %}
+                  {% for opt in diseases_opts %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                  {% endfor %}
+                {% else %}
+                    <option value="" disabled>Data Penyakit tidak ditemukan di Dataset</option>
+                {% endif %}
+              </select>
+              <p class="text-xs text-slate-500 mt-1">Standar Medis (Kemenkes/PERKENI/PERKI).</p>
+            </div>
+
+          </div>
+
+          <div class="pt-4">
+            <label class="text-sm font-medium text-slate-700">Durasi Rencana (Hari)</label>
+            <input type="range" name="days" min="1" max="7" value="3"
+              class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600 mt-2"
+              oninput="this.nextElementSibling.value = this.value + ' Hari'">
+            <output class="text-sm font-bold text-brand-600">3 Hari</output>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-8 bg-slate-50 border-t border-slate-100">
+        <button type="submit"
+          class="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-8 py-4 text-base font-bold text-white shadow-xl shadow-slate-900/10 transition hover:bg-slate-800 hover:scale-[1.01]">
+          <span>Analisis & Buat Menu</span>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+            <path fill-rule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+
+    </form>
+  </div>
+</section>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // TomSelect Alergi
+    if (document.getElementById('alergiSelect')) {
+        new TomSelect('#alergiSelect', {
+        plugins: ['remove_button'],
+        create: false, 
+        placeholder: 'Cari alergi...',
+        maxOptions: 100
+        });
+    }
+
+    // TomSelect Penyakit
+    if (document.getElementById('penyakitSelect')) {
+        new TomSelect('#penyakitSelect', {
+        plugins: ['remove_button'],
+        create: false, 
+        placeholder: 'Cari kondisi kesehatan...',
+        maxOptions: 100
+        });
+    }
+  });
+</script>
+{% endblock %}
