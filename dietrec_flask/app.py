@@ -107,15 +107,18 @@ def result():
     res, meta, errs = compute_engine(data)
     if errs: return f"Error: {errs}"
 
-    # --- HITUNG DATA CHART DI SINI (Supaya HTML Bersih) ---
+    # --- HITUNG DATA CHART (FIX: Menggunakan 'total' bukan 'agg') ---
     chart_days = [f"Hari {d['day']}" for d in res["plan"]]
-    chart_kcal = [int(sum(m['agg']['kcal'] for m in d['meals'])) for d in res["plan"]]
+    
+    # FIX #1: Ganti m['agg'] menjadi m['total']
+    chart_kcal = [int(sum(m['total']['kcal'] for m in d['meals'])) for d in res["plan"]]
     
     chart_radar = []
     for d in res["plan"]:
-        P = sum(m['agg']['protein_g'] for m in d['meals'])
-        L = sum(m['agg']['fat_g'] for m in d['meals'])
-        K = sum(m['agg']['carb_g'] for m in d['meals'])
+        # FIX #2: Ganti m['agg'] menjadi m['total']
+        P = sum(m['total']['protein_g'] for m in d['meals'])
+        L = sum(m['total']['fat_g'] for m in d['meals'])
+        K = sum(m['total']['carb_g'] for m in d['meals'])
         total = max(1, P + L + K)
         chart_radar.append([
             round(P/total*100, 1), 
@@ -222,12 +225,13 @@ def export_pdf():
 
         # --- SECTION 2: MEAL PLAN ---
         for day in res["plan"]:
-            total_cal = int(sum(m['agg']['kcal'] for m in day['meals']))
+            # FIX #3: Ganti m['agg'] menjadi m['total']
+            total_cal = int(sum(m['total']['kcal'] for m in day['meals']))
             story.append(Paragraph(f"HARI KE-{day['day']} — Total: {total_cal} kkal", style_h2))
             
             for meal in day['meals']:
-                # Sub-header Meal (Sarapan/Siang/Malam)
-                story.append(Paragraph(f"<b>{meal['name']}</b> (Est. {int(meal['agg']['kcal'])} kkal)", style_normal))
+                # FIX #4: Ganti m['agg'] menjadi m['total'] untuk display sub-header
+                story.append(Paragraph(f"<b>{meal['name']}</b> (Est. {int(meal['total']['kcal'])} kkal)", style_normal))
                 story.append(Spacer(1, 4))
                 
                 # Tabel Menu Detail

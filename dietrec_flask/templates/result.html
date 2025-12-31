@@ -216,7 +216,7 @@
         <div class="flex-grow flex items-center justify-center relative min-h-[180px]">
           <canvas id="donutTarget"></canvas>
           <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            <span class="text-3xl font-black text-slate-800">50%</span>
+            <span class="text-3xl font-black text-slate-800">50%</span> 
             <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Karbo</span>
           </div>
         </div>
@@ -269,22 +269,22 @@
             <div>
               <h3 class="font-bold text-base text-slate-800">Hari ke-{{ day['day'] }}</h3>
               <p class="text-xs text-slate-500">Total Energi: <span class="font-bold text-brand-600">{{
-                  day['meals']|sum(attribute='agg.kcal')|int }} kkal</span></p>
+                  day['meals']|sum(attribute='total.kcal')|int }} kkal</span></p>
             </div>
           </div>
 
           <div class="flex gap-2">
             <span
               class="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-slate-500 uppercase">
-              P: {{ day['meals']|sum(attribute='agg.protein_g')|int }}g
+              P: {{ day['meals']|sum(attribute='total.protein_g')|int }}g
             </span>
             <span
               class="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-slate-500 uppercase">
-              L: {{ day['meals']|sum(attribute='agg.fat_g')|int }}g
+              L: {{ day['meals']|sum(attribute='total.fat_g')|int }}g
             </span>
             <span
               class="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-slate-500 uppercase">
-              K: {{ day['meals']|sum(attribute='agg.carb_g')|int }}g
+              K: {{ day['meals']|sum(attribute='total.carb_g')|int }}g
             </span>
           </div>
         </div>
@@ -301,7 +301,7 @@
               </span>
               <div class="h-px bg-slate-100 flex-grow hidden sm:block"></div>
               <span class="text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">
-                ± {{ meal['agg']['kcal']|int }} kkal
+                ± {{ meal['total']['kcal']|int }} kkal
               </span>
             </div>
 

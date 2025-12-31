@@ -1,11 +1,11 @@
+# FILE: planner.py (REVISI FULL)
 from __future__ import annotations
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
 
 # ==============================================================================
-# MODUL PERENCANA MENU (PLANNER)
-# Referensi: Bab 3.3.2 Alur Proses & Bab 2.6 Evaluasi Nutrisi
+# MODUL PERENCANA MENU (PLANNER) - REVISED (RANDOMIZED TOP-N)
 # ==============================================================================
 
 def optimize_meal_plan(
@@ -14,94 +14,80 @@ def optimize_meal_plan(
     days: int
 ) -> List[Dict[str, Any]]:
     """
-    Menyusun Rencana Menu Harian.
-    
-    [Ref: Bab 3.3.2 Alur Proses Sistem]
-    Langkah:
-    1. Ambil menu valid dengan Skor Terbaik (S_FINAL terkecil).
-    2. Susun kombinasi Staple + Protein + Sayur.
-    3. Optimasi Porsi untuk meminimalkan Calorie Gap [Ref: Bab 2.6.1].
+    Menyusun Rencana Menu Harian dengan Variasi (Top-N Randomization).
     """
     plan = []
     
-    # Filter kandidat berdasarkan kelas (4 Sehat 5 Sempurna)
-    staples = df_ranked[df_ranked["CLASS_45"] == "staple"]
-    proteins = df_ranked[df_ranked["CLASS_45"] == "protein"]
-    veggies = df_ranked[df_ranked["CLASS_45"] == "vegetable"]
-    fruits = df_ranked[df_ranked["CLASS_45"] == "fruit"]
-    milks = df_ranked[df_ranked["CLASS_45"] == "milk"]
-    others = df_ranked[df_ranked["CLASS_45"] == "other"]
+    # 1. Filter kandidat berdasarkan kelas
+    # Kita ambil Top-50 terbaik dulu agar ada variasi saat sampling
+    # S_FINAL ascending (semakin kecil semakin baik)
+    staples = df_ranked[df_ranked["CLASS_45"] == "staple"].head(50)
+    proteins = df_ranked[df_ranked["CLASS_45"] == "protein"].head(50)
+    veggies = df_ranked[df_ranked["CLASS_45"] == "vegetable"].head(50)
+    fruits = df_ranked[df_ranked["CLASS_45"] == "fruit"].head(50)
+    
+    # Rasio Kalori per Waktu Makan (Pagi 30%, Siang 40%, Malam 30%)
+    meal_ratios = {
+        "Pagi": 0.30,
+        "Siang": 0.40,
+        "Malam": 0.30
+    }
 
-    # Target Energi per Meal (Asumsi 3x Makan Utama)
-    target_per_meal = tdee_target / 3.0
+    # Helper untuk mengambil item secara acak dari Top-N (misal Top 5)
+    def get_random_top_n(df_source, n=5):
+        if df_source.empty: return {}
+        # Ambil sampel acak dari n teratas
+        subset = df_source.head(n)
+        return subset.sample(n=1).iloc[0].to_dict()
 
     for d in range(1, days + 1):
         day_meals = []
+        daily_total = {"kcal": 0, "protein_g": 0, "fat_g": 0, "carb_g": 0}
         
-        # [Ref: Bab 3.3.2 Variasi Menu]
-        # Menggunakan shift index agar menu hari ke-n berbeda dengan hari ke-(n-1)
-        shift = (d - 1) * 2 
-        
-        for meal_name in ["Sarapan", "Makan Siang", "Makan Malam"]:
+        for meal_name, ratio in meal_ratios.items():
+            target_kcal = tdee_target * ratio
             
-            # Helper: Ambil item terbaik dengan offset rotasi
-            # Return type explicit: Series atau None
-            def pick_best(source_df: pd.DataFrame, offset: int = 0) -> Optional[pd.Series]:
-                if source_df.empty: 
-                    return None
-                # Pilih berdasarkan S_FINAL terendah (sudah disort di module scoring)
-                idx = (shift + offset) % len(source_df)
-                return source_df.iloc[idx]
-
-            # Komposisi Meal [Ref: Konsep Gizi Seimbang]
-            st = pick_best(staples, offset=0 if meal_name=="Sarapan" else 1)
-            pr = pick_best(proteins, offset=0 if meal_name=="Sarapan" else 1)
-            vg = pick_best(veggies, offset=0)
+            # 2. PILIH KOMPOSISI (VARIASI DITAMBAHKAN DISINI)
+            # Menggunakan Top-5 Randomization agar menu tidak monoton
+            s_item = get_random_top_n(staples, n=5)
+            p_item = get_random_top_n(proteins, n=5)
+            v_item = get_random_top_n(veggies, n=5)
             
-            # Tambahan: Buah (Siang), Susu (Pagi)
-            fr = pick_best(fruits, offset=0) if meal_name == "Makan Siang" else None
-            mk = pick_best(milks, offset=0) if meal_name == "Sarapan" else None
-
-            # Gabungkan item yang ada (Filter None)
-            candidates: List[pd.Series] = [x for x in [st, pr, vg, fr, mk] if x is not None]
+            # Buat list items
+            raw_items = [x for x in [s_item, p_item, v_item] if x]
             
-            # Fallback jika data kategori kosong (Fix Error Type Safety)
-            # Pastikan item dari 'others' tidak None sebelum di-append
-            if not candidates and not others.empty:
-                backup_item = pick_best(others, 0)
-                if backup_item is not None:
-                    candidates.append(backup_item)
-
-            # --- Optimasi Porsi (Minimalkan Calorie Gap) ---
-            # [Ref: Bab 2.6.1 Calorie Gap (Delta E)]
+            # Jika makan siang/pagi tambahkan buah (opsional)
+            if meal_name in ["Pagi", "Siang"]:
+                f_item = get_random_top_n(fruits, n=5)
+                if f_item: raw_items.append(f_item)
             
-            # Total energi mentah (per 100g)
-            # Menggunakan .get() untuk keamanan akses kolom series
-            base_kcal = sum(float(c.get("ENERGI", 0)) for c in candidates)
-            
-            # Hitung Ratio agar Total Energi Meal mendekati Target
-            ratio = target_per_meal / (base_kcal + 1e-9)
-            # Batasi scaling porsi (0.5x s.d 2.5x porsi standar 100g) agar wajar
-            ratio = np.clip(ratio, 0.5, 2.5)
-
+            # 3. HITUNG PORSI (Sama seperti logika lama, tapi lebih rapi)
             current_agg = {"kcal": 0, "protein_g": 0, "fat_g": 0, "carb_g": 0}
             meal_items_formatted = []
             
-            for item in candidates:
-                # Konversi ke porsi matang/sajian
-                porsi_gram = 100.0 * ratio
+            # Hitung total kalori 'base' (per 100g)
+            base_total_kcal = sum([float(x.get("ENERGI", 0)) for x in raw_items])
+            
+            if base_total_kcal > 0:
+                # Scaling factor agar sesuai target kalori sesi makan ini
+                scaling_factor = target_kcal / base_total_kcal
+            else:
+                scaling_factor = 1.0
+
+            for item in raw_items:
+                # Gramasi dasar 100g * scaling
+                # Kita batasi porsi minimal 30g dan maksimal 300g agar masuk akal
+                porsi_gram = max(30, min(100 * scaling_factor, 400))
                 
-                # Akses aman ke nilai nutrisi
-                val_energi = float(item.get("ENERGI", 0))
-                val_protein = float(item.get("PROTEIN", 0))
-                val_lemak = float(item.get("LEMAK", 0))
-                val_karbo = float(item.get("KARBO", 0))
+                # Hitung ulang nutrisi real berdasarkan porsi
+                ratio_real = porsi_gram / 100.0
                 
-                it_kcal = val_energi * ratio
-                it_p = val_protein * ratio
-                it_l = val_lemak * ratio
-                it_k = val_karbo * ratio
+                it_kcal = float(item.get("ENERGI", 0)) * ratio_real
+                it_p = float(item.get("PROTEIN", 0)) * ratio_real
+                it_l = float(item.get("LEMAK", 0)) * ratio_real
+                it_k = float(item.get("KARBO", 0)) * ratio_real
                 
+                # Akumulasi
                 current_agg["kcal"] += it_kcal
                 current_agg["protein_g"] += it_p
                 current_agg["fat_g"] += it_l
@@ -112,20 +98,26 @@ def optimize_meal_plan(
                     "class": str(item.get("CLASS_45", "other")),
                     "portion_g": round(porsi_gram),
                     "kcal": round(it_kcal),
-                    "protein_g": round(it_p, 1),
-                    "fat_g": round(it_l, 1),
-                    "carb_g": round(it_k, 1)
+                    "protein": round(it_p, 1),
+                    "fat": round(it_l, 1),
+                    "carb": round(it_k, 1)
                 })
-                
+            
+            # Masukkan ke rekap harian
             day_meals.append({
                 "name": meal_name,
                 "items": meal_items_formatted,
-                "agg": current_agg
+                "total": current_agg
             })
             
-            # Increment shift intra-day
-            shift += 1
+            # Tambah ke total harian
+            for k in daily_total:
+                daily_total[k] += current_agg.get(k, 0)
 
-        plan.append({"day": d, "meals": day_meals})
-
+        plan.append({
+            "day": d,
+            "meals": day_meals,
+            "daily_total": {k: round(v, 1) for k, v in daily_total.items()}
+        })
+        
     return plan
