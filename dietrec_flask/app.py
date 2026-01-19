@@ -2,13 +2,14 @@ from __future__ import annotations
 import io
 import datetime
 import traceback
+import os
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, jsonify
 
 # --- IMPORT MODUL UTAMA ---
 try:
     from modules.io_utils import load_tkpi, extract_dropdown_options
     from modules.calc_utils import mifflin_st_jeor, tdee_with_goal, bmi_and_category
-    from modules.scoring import apply_filters, score_rule_macro, score_ml_ensemble
+    from modules.scoring import apply_filters, calculate_scores, load_models, train_models
     from modules.planner import optimize_meal_plan
 except ImportError as e:
     print(f"CRITICAL ERROR: {e}")
@@ -20,6 +21,7 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
+    from reportlab.lib.units import cm
 except ImportError:
     print("WARNING: ReportLab belum diinstall. Fitur PDF tidak akan berjalan.")
 
@@ -68,6 +70,7 @@ def compute_engine(form_data: dict):
         df, mapping, errs = load_tkpi()
         if errs: return None, meta, errs
 
+        # LAPISAN 1: Filtering Rule-Based
         df_filtered = apply_filters(df, mapping, halal_pref, allergies, diseases)
         meta["count_candidates"] = len(df_filtered)
         
@@ -75,8 +78,16 @@ def compute_engine(form_data: dict):
             return None, meta, ["Tidak ada menu yang lolos filter (Cek batasan Alergi/Penyakit)."]
 
         # 4. Scoring & Planning (Hybrid System)
-        df_rb = score_rule_macro(df_filtered, mapping, tdee_val)
-        df_ranked = score_ml_ensemble(df_rb)
+        bundle = load_models()
+        if bundle is None:
+            print("[INFO] Model belum ditemukan. Melatih ulang model secara otomatis...")
+            rf_model, xgb_model = train_models(df)
+            bundle = {"rf": rf_model, "xgb": xgb_model}
+
+        # LAPISAN 2: Scoring Ensemble (Hanya 4 Makronutrien)
+        df_ranked = calculate_scores(df_filtered, bundle)
+        
+        # LAPISAN 3: Meal Planning
         plan = optimize_meal_plan(df_ranked, tdee_val, days)
 
         return {"ranked": df_ranked, "plan": plan}, meta, []
@@ -116,18 +127,14 @@ def result():
 
     # --- PREPARE DATA FOR CHARTS (Frontend) ---
     chart_days = [f"Hari {d['day']}" for d in res["plan"]]
-    
-    # [SINKRONISASI] Menggunakan key 'total' (bukan 'agg')
     chart_kcal = [int(sum(m['total']['kcal'] for m in d['meals'])) for d in res["plan"]]
     
     chart_radar = []
     for d in res["plan"]:
-        # [SINKRONISASI] Menggunakan key 'total'
         P = sum(m['total']['protein_g'] for m in d['meals'])
         L = sum(m['total']['fat_g'] for m in d['meals'])
         K = sum(m['total']['carb_g'] for m in d['meals'])
         
-        # Konversi ke % Kalori (P=4, L=9, K=4)
         cal_P = P * 4
         cal_L = L * 9
         cal_K = K * 4
@@ -154,12 +161,10 @@ def result():
 
 @app.route("/api/recalc", methods=["POST"])
 def api_recalc():
-    """Endpoint untuk update menu tanpa reload halaman penuh"""
     try:
         req = request.json
         base = session.get("form_data", {}).copy()
         
-        # Update preferensi baru
         base.update({
             "halal": req.get("halal"),
             "days": req.get("days"),
@@ -167,13 +172,11 @@ def api_recalc():
             "diseases": req.get("diseases", [])
         })
         
-        # Simpan kembali ke session
         sess = base.copy()
         if isinstance(sess["allergies"], list): sess["allergies"] = ",".join(sess["allergies"])
         if isinstance(sess["diseases"], list): sess["diseases"] = ",".join(sess["diseases"])
         session["form_data"] = sess
 
-        # Re-run engine
         res, meta, errs = compute_engine(base)
         if errs: return jsonify({"ok": False, "error": errs[0]})
 
@@ -184,7 +187,7 @@ def api_recalc():
 @app.route("/export_pdf")
 def export_pdf():
     """
-    Generate Laporan PDF dengan fitur Clean Name (menghapus kata 'mentah', 'segar', dll).
+    Generate Laporan PDF dengan Profil Lengkap (Sesuai Input User) & Clean Name.
     """
     data = session.get("form_data")
     if not data: return redirect(url_for("input_page"))
@@ -199,47 +202,100 @@ def export_pdf():
                                 topMargin=40, bottomMargin=40)
         
         styles = getSampleStyleSheet()
+        # Custom Styles
         style_title = ParagraphStyle('CustomTitle', parent=styles['Title'], fontSize=20, textColor=colors.HexColor('#14532d'), spaceAfter=10)
         style_h2 = ParagraphStyle('CustomH2', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor('#15803d'), spaceBefore=15, spaceAfter=8)
         style_normal = styles['Normal']
-        
+        style_small = ParagraphStyle('Small', parent=styles['Normal'], fontSize=9)
+        style_label = ParagraphStyle('Label', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold')
+
         story = []
 
-        # --- FUNGSI PEMBERSIH NAMA (Supaya PDF enak dibaca) ---
+        # --- HELPER: MAPPING TEKS AGAR SESUAI INPUT FORM ---
+        def get_activity_text(key):
+            m = {
+                "sangat_ringan": "Sangat Ringan (Jarang olahraga/Duduk kerja)",
+                "ringan": "Ringan (Olahraga 1-3x seminggu)",
+                "sedang": "Sedang (Olahraga 3-5x seminggu)",
+                "berat": "Berat (Olahraga 6-7x seminggu)",
+                "sangat_berat": "Sangat Berat (Atlet/Pekerja fisik berat)"
+            }
+            k = str(key).lower().replace(" ", "_")
+            return m.get(k, key)
+
+        def get_goal_text(key):
+            k = str(key).lower()
+            if "cut" in k or "turun" in k: return "Turun Berat (Defisit kalori aman)"
+            if "bulk" in k or "naik" in k: return "Tambah Berat (Surplus untuk otot)"
+            return "Pertahankan (Jaga berat stabil)"
+
         def clean_name(txt):
-            # Hapus kata teknis agar terlihat seperti "Menu", bukan "Bahan"
-            bad_words = [", mentah", " mentah", ", segar", " segar", ", kering", " kering", "Daging, "]
+            bad_words = [", mentah", " mentah", ", segar", " segar", ", kering", " kering", "Daging, ", "Ikan, ", "Ayam, "]
             cleaned = str(txt)
             for w in bad_words:
-                cleaned = cleaned.replace(w, "")
-                cleaned = cleaned.replace(w.lower(), "")
-                cleaned = cleaned.replace(w.upper(), "")
+                cleaned = cleaned.replace(w, "").replace(w.lower(), "").replace(w.upper(), "")
             return cleaned.strip()
 
         # --- HEADER ---
         story.append(Paragraph("Laporan Rencana Diet Personal", style_title))
         story.append(Paragraph(f"Dibuat oleh NutriPlan • {datetime.datetime.now().strftime('%d %B %Y')}", style_normal))
-        story.append(Spacer(1, 20))
+        story.append(Spacer(1, 15))
 
-        # --- SECTION 1: PROFIL ---
-        data_profil = [
-            ["INFORMASI PENGGUNA", ""],
-            [f"Target: {str(meta['goal']).upper()}", f"BMR: {meta['bmr']} kkal"],
-            [f"BMI: {meta['bmi']} ({meta['bmi_cat']})", f"TDEE: {meta['tdee']} kkal"]
+        # --- SECTION 1: PROFIL PENGGUNA LENGKAP ---
+        # Kita gunakan Tabel dengan Paragraph agar teks panjang bisa wrapping
+        
+        # Siapkan Data
+        act_txt = get_activity_text(meta['activity'])
+        goal_txt = get_goal_text(meta['goal'])
+        al_txt = ", ".join(meta['allergies']) if meta['allergies'] else "-"
+        dis_txt = ", ".join(meta['diseases']) if meta['diseases'] else "-"
+        
+        # Struktur Tabel Profil
+        profile_data = [
+            [Paragraph("<b>INFORMASI DASAR</b>", style_normal), ""],
+            [Paragraph("Usia:", style_label), Paragraph(f"{meta['age']} Tahun", style_normal)],
+            [Paragraph("Jenis Kelamin:", style_label), Paragraph(f"{meta['sex']}", style_normal)],
+            [Paragraph("Berat Badan:", style_label), Paragraph(f"{meta['weight']} kg", style_normal)],
+            [Paragraph("Tinggi Badan:", style_label), Paragraph(f"{meta['height']} cm", style_normal)],
+            
+            [Paragraph("<b>GAYA HIDUP & TUJUAN</b>", style_normal), ""],
+            [Paragraph("Aktivitas:", style_label), Paragraph(act_txt, style_normal)], # Text wrapping here
+            [Paragraph("Target:", style_label), Paragraph(goal_txt, style_normal)],
+            [Paragraph("Durasi Rencana:", style_label), Paragraph(f"{meta['days']} Hari", style_normal)],
+            [Paragraph("BMI / Kategori:", style_label), Paragraph(f"{meta['bmi']} ({meta['bmi_cat']})", style_normal)],
+            [Paragraph("TDEE (Kebutuhan):", style_label), Paragraph(f"<b>{meta['tdee']} kkal</b>", style_normal)],
+
+            [Paragraph("<b>PREFERENSI MAKANAN</b>", style_normal), ""],
+            [Paragraph("Prioritas Halal:", style_label), Paragraph(f"{meta['halal']}", style_normal)],
+            [Paragraph("Alergi/Pantangan:", style_label), Paragraph(al_txt, style_normal)],
+            [Paragraph("Kondisi Kesehatan:", style_label), Paragraph(dis_txt, style_normal)],
         ]
-        t_prof = Table(data_profil, colWidths=[230, 230])
+
+        # Buat Tabel
+        t_prof = Table(profile_data, colWidths=[120, 330])
         t_prof.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (1,0), colors.HexColor('#dcfce7')),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-            ('FONTNAME', (0,0), (1,0), 'Helvetica-Bold'),
+            ('SPAN', (0,0), (1,0)), # Header Info Dasar
+            ('SPAN', (0,5), (1,5)), # Header Gaya Hidup
+            ('SPAN', (0,11), (1,11)), # Header Preferensi
+            
+            ('BACKGROUND', (0,0), (1,0), colors.HexColor('#dcfce7')), # Hijau Muda Header
+            ('BACKGROUND', (0,5), (1,5), colors.HexColor('#dcfce7')),
+            ('BACKGROUND', (0,11), (1,11), colors.HexColor('#dcfce7')),
+            
+            ('TEXTCOLOR', (0,0), (1,0), colors.HexColor('#14532d')), # Teks Hijau Tua Header
+            ('TEXTCOLOR', (0,5), (1,5), colors.HexColor('#14532d')),
+            ('TEXTCOLOR', (0,11), (1,11), colors.HexColor('#14532d')),
+
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('GRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
             ('PADDING', (0,0), (-1,-1), 6),
         ]))
+        
         story.append(t_prof)
         story.append(Spacer(1, 25))
 
         # --- SECTION 2: MEAL PLAN ---
         for day in res["plan"]:
-            # Hitung Total Kalori Harian
             total_cal = int(sum(m['total']['kcal'] for m in day['meals']))
             story.append(Paragraph(f"HARI KE-{day['day']} — Total: {total_cal} kkal", style_h2))
             
@@ -247,12 +303,9 @@ def export_pdf():
                 story.append(Paragraph(f"<b>{meal['name']}</b> (Est. {int(meal['total']['kcal'])} kkal)", style_normal))
                 story.append(Spacer(1, 4))
                 
-                # Tabel Menu Detail
                 menu_data = [["Kategori", "Nama Menu", "Porsi", "Energi", "P", "L", "K"]]
                 for item in meal['items']:
-                    # Gunakan clean_name() di sini
                     display_name = clean_name(item.get('name',''))
-                    
                     menu_data.append([
                         str(item.get('class','')).capitalize(),
                         Paragraph(display_name, styles['BodyText']), 
@@ -269,17 +322,16 @@ def export_pdf():
                     ('GRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
                     ('FONTSIZE', (0,0), (-1,-1), 8),
                     ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                    ('ALIGN', (2,0), (-1,-1), 'RIGHT'), # Angka rata kanan
+                    ('ALIGN', (2,0), (-1,-1), 'RIGHT'),
                 ]))
                 story.append(t_menu)
                 story.append(Spacer(1, 12))
-                
+            
             story.append(PageBreak())
 
-        # --- FOOTER ---
         doc.build(story)
         buffer.seek(0)
-        return send_file(buffer, as_attachment=True, download_name=f"NutriPlan_{datetime.date.today()}.pdf", mimetype='application/pdf')
+        return send_file(buffer, as_attachment=True, download_name=f"NutriPlan_Lengkap_{datetime.date.today()}.pdf", mimetype='application/pdf')
 
     except Exception as e:
         traceback.print_exc()
