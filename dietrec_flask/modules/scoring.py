@@ -1,161 +1,163 @@
-from __future__ import annotations
-from pathlib import Path
-from typing import List, Dict, Any
-import numpy as np
 import pandas as pd
-
-try:
-    import joblib
-except ImportError:
-    joblib = None
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-MODEL_DIR = BASE_DIR / "models"
-ENSEMBLE_PATH = MODEL_DIR / "ensemble_komposisi.pkl"
+import numpy as np
+import joblib
+import os
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from sklearn.model_selection import train_test_split
 
 # ==============================================================================
-# MODUL SCORING
+# KONFIGURASI MODEL
 # ==============================================================================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_DIR = os.path.join(BASE_DIR, "models")
 
-def _normalize_list(values: List[str]) -> List[str]:
-    return [v.strip().lower() for v in values if str(v).strip()]
+if not os.path.exists(MODEL_DIR):
+    os.makedirs(MODEL_DIR)
 
-def _row_has_label(cell_val: Any, user_labels: List[str]) -> bool:
-    if pd.isna(cell_val): return False
-    txt = str(cell_val).lower().replace(";", ",")
-    tokens = [t.strip() for t in txt.split(",") if t.strip()]
-    return any(u in tokens for u in user_labels)
-
-# -------------------------------------------------------------------
-# 1. FILTERING
-# -------------------------------------------------------------------
-def apply_filters(df: pd.DataFrame, mapping: Dict[str, str], halal_pref: bool, allergies: List[str], diseases: List[str]) -> pd.DataFrame:
+# ==============================================================================
+# 1. SAFETY LAYER (FILTERING)
+# ==============================================================================
+def apply_filters(df, mapping, halal_pref, allergies, diseases):
+    """
+    LAPISAN 1: SAFETY LAYER (Rule-Based Filtering)
+    Menyaring menu berdasarkan batasan absolut: Halal, Alergi, dan Penyakit.
+    Sifat: Hard Constraint (Menu yang tidak lolos langsung dibuang).
+    """
     out = df.copy()
     
-    # Halal
-    if halal_pref and mapping.get("halal_flag"):
-        col = mapping["halal_flag"]
-        allowed = ["halal", "ya", "1", "true"]
-        out = out[out[col].astype(str).str.lower().isin(allowed)]
-    
-    # Alergi
-    user_al = _normalize_list(allergies)
-    if user_al and mapping.get("allergy"):
-        out = out[~out[mapping["allergy"]].apply(lambda x: _row_has_label(x, user_al))]
-        
-    # Penyakit
-    user_dis = _normalize_list(diseases)
-    if "hipertensi" in user_dis and mapping.get("sodium") in out.columns:
-        out = out[out[mapping["sodium"]] < 800]
-    if any(x in user_dis for x in ["diabetes", "kencing manis"]) and mapping.get("sugar") in out.columns:
-        out = out[out[mapping["sugar"]] < 15]
-        
-    return out.reset_index(drop=True)
+    # helper cek label
+    def _row_has_label(cell_val, keywords):
+        val_lower = str(cell_val).lower()
+        for k in keywords:
+            if k.lower() in val_lower:
+                return True
+        return False
 
-# -------------------------------------------------------------------
-# 2. RULE BASED (S_RULE)
-# -------------------------------------------------------------------
-def _classify_category(row):
-    # Klasifikasi sederhana 4 sehat 5 sempurna
-    txt = (str(row.get("NAMA", "")) + " " + str(row.get("KATEGORI", ""))).lower()
-    
-    if any(x in txt for x in ["nasi", "beras", "mie", "roti", "ubi", "kentang", "jagung"]): return "staple"
-    if any(x in txt for x in ["ayam", "daging", "ikan", "telur", "tempe", "tahu", "udang", "sapi"]): return "protein"
-    if any(x in txt for x in ["sayur", "bayam", "kangkung", "wortel", "sawi", "tomat"]): return "vegetable"
-    if any(x in txt for x in ["jeruk", "pisang", "apel", "pepaya", "buah", "mangga"]): return "fruit"
-    if any(x in txt for x in ["susu", "keju", "yogurt"]): return "milk"
-    return "other"
+    # 1. Filter Halal (Wajib)
+    if halal_pref and mapping.get("halal"):
+        # Hanya ambil yang memiliki label 'halal' pada kolom terkait
+        out = out[out[mapping["halal"]].astype(str).str.contains("halal", case=False, na=False)]
 
-def score_rule_macro(df: pd.DataFrame, mapping: Dict[str, str], tdee: float) -> pd.DataFrame:
-    df_rb = df.copy()
-    target_kcal = tdee / 3.0 # per meal
-    
-    # Target Makro (Gram)
-    t_K = (0.5 * target_kcal) / 4
-    t_P = (0.2 * target_kcal) / 4
-    t_L = (0.3 * target_kcal) / 9
-    
-    # Ambil kolom (Nama kolom sudah distandarisasi di io_utils)
-    E = df_rb["ENERGI"]
-    P = df_rb["PROTEIN"]
-    L = df_rb["LEMAK"]
-    K = df_rb["KARBO"]
-    
-    eps = 1e-9
-    # Hitung Deviasi untuk S_RULE
-    dev_E = (E - target_kcal).abs() / (target_kcal + eps)
-    dev_P = (P - t_P).abs() / (t_P + eps)
-    dev_L = (L - t_L).abs() / (t_L + eps)
-    dev_K = (K - t_K).abs() / (t_K + eps)
-    
-    # Skor Rule-Based
-    df_rb["S_ENERGY"] = 0.4 * dev_E
-    df_rb["S_MACRO"] = (0.3 * dev_P) + (0.2 * dev_L) + (0.1 * dev_K)
-    df_rb["S_RULE"] = df_rb["S_ENERGY"] + df_rb["S_MACRO"]
-    
-    df_rb["CLASS_45"] = df_rb.apply(_classify_category, axis=1)
-    
-    return df_rb.sort_values("S_RULE")
+    # 2. Filter Alergi (Wajib)
+    if allergies and mapping.get("allergy"):
+        col_a = mapping["allergy"]
+        for allergy in allergies:
+            # Buang baris jika mengandung kata kunci alergi
+            mask = out[col_a].astype(str).apply(lambda x: _row_has_label(x, [allergy]))
+            out = out[~mask]
 
-# -------------------------------------------------------------------
-# 3. ML ENSEMBLE (PREDIKSI)
-# -------------------------------------------------------------------
-def score_ml_ensemble(df_scored: pd.DataFrame) -> pd.DataFrame:
+    # 3. Filter Penyakit (Wajib - Safety First)
+    if diseases and mapping.get("penyakit"):
+        col_p = mapping["penyakit"]
+        for d in diseases:
+            # Buang menu yang ditandai sebagai pantangan untuk penyakit tersebut
+            mask = out[col_p].astype(str).apply(lambda x: _row_has_label(x, [d]))
+            out = out[~mask]
+
+    return out
+
+# ==============================================================================
+# 2. INTELLIGENCE LAYER (SCORING & MODELING)
+# ==============================================================================
+def _calculate_pseudo_label(row, target_calories=2000):
     """
-    Fungsi Prediksi ML.
-    Model dilatih dengan fitur skor deviasi: S_ENERGY, S_MACRO, S_RULE.
+    Menghitung skor manual (Pseudo-Label) sebagai target latihan model.
     """
-    df_ml = df_scored.copy()
+    e = float(row.get("ENERGI", 0))
+    p = float(row.get("PROTEIN", 0))
+    l = float(row.get("LEMAK", 0))
     
-    if joblib and ENSEMBLE_PATH.exists():
-        try:
-            bundle = joblib.load(ENSEMBLE_PATH)
-            
-            # --- FIX HYBRID ENSEMBLE ---
-            # Berdasarkan log error, RF dan XGB dilatih dengan fitur berbeda:
-            # 1. RF  -> Butuh S_ENERGY, S_MACRO, S_RULE
-            # 2. XGB -> Butuh ENERGI, KARBO, LEMAK, PROTEIN
-            
-            fts_score = ["S_ENERGY", "S_MACRO", "S_RULE"]
-            fts_macro = ["ENERGI", "KARBO", "LEMAK", "PROTEIN"]
-            
-            # --- FIX: DYNAMIC FEATURE SELECTION ---
-            # Agar tidak menebak-nebak, kita baca atribut 'feature_names_in_' dari model
-            # jika tersedia (Sklearn > 1.0 & XGBoost support ini)
-            
-            def predict_robust(model, df, default_feats, model_name="Model"):
-                try:
-                    # 1. Deteksi Fitur yang diminta model
-                    needed_feats = getattr(model, "feature_names_in_", default_feats)
-                    
-                    # 2. Pastikan kolom ada di DF (Inject 0 jika missing)
-                    missing = [f for f in needed_feats if f not in df.columns]
-                    if missing:
-                        for f in missing: df[f] = 0.0
-                        
-                    # 3. Select subset kolom
-                    X = df[needed_feats]
-                    
-                    # 4. Predict
-                    return model.predict(X)
-                except Exception as e:
-                    print(f"[Warning ML-{model_name}] {e}")
-                    return None
+    # Logika Sederhana: Semakin dekat ke target kalori per porsi, semakin bagus
+    meal_target = target_calories * 0.33 
+    diff_e = abs(e - meal_target)
+    
+    # Skor dasar (0-100)
+    score = 100 * np.exp(-0.005 * diff_e)
+    
+    # Bonus Keseimbangan Makro
+    if p > 10: score += 5
+    if l < 20: score += 5
+    
+    return max(0, min(100, score))
 
-            # Eksekusi dengan Fallback
-            pred_rf = predict_robust(bundle["rf"], df_ml, fts_macro, "RF")
-            if pred_rf is None: pred_rf = df_ml["S_RULE"]
-            
-            pred_xgb = predict_robust(bundle["xgb"], df_ml, fts_score, "XGB")
-            if pred_xgb is None: pred_xgb = df_ml["S_RULE"]
+def train_models(df):
+    """
+    Melatih model Random Forest dan XGBoost.
+    Fitur input DIBATASI hanya 4 Makronutrien Utama.
+    """
+    df = df.copy()
+    # Siapkan Pseudo-Label
+    df["pseudo_score"] = df.apply(lambda r: _calculate_pseudo_label(r, 2000), axis=1)
 
-            # 4. Gabung (Ensemble)
-            df_ml["S_FINAL"] = (0.5 * pred_rf) + (0.5 * pred_xgb)
-            return df_ml.sort_values("S_FINAL")
+    # HANYA GUNAKAN 4 MACRO UTAMA
+    feature_cols = ["ENERGI", "PROTEIN", "LEMAK", "KARBO"]
+    
+    # Pastikan kolom ada
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = 0
+
+    X = df[feature_cols].fillna(0)
+    y = df["pseudo_score"]
+
+    # Split & Train
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    rf = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf.fit(X_train, y_train)
+
+    xgb = XGBRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+    xgb.fit(X_train, y_train)
+
+    # Simpan Model
+    joblib.dump(rf, os.path.join(MODEL_DIR, "rf_model.pkl"))
+    joblib.dump(xgb, os.path.join(MODEL_DIR, "xgb_model.pkl"))
+    
+    print("Model berhasil dilatih ulang dengan fitur:", feature_cols)
+    return rf, xgb
+
+def load_models():
+    """Memuat model dari disk."""
+    rf_path = os.path.join(MODEL_DIR, "rf_model.pkl")
+    xgb_path = os.path.join(MODEL_DIR, "xgb_model.pkl")
+
+    if os.path.exists(rf_path) and os.path.exists(xgb_path):
+        rf = joblib.load(rf_path)
+        xgb = joblib.load(xgb_path)
+        return {"rf": rf, "xgb": xgb}
+    else:
+        return None
+
+def calculate_scores(df_filtered, bundle):
+    """
+    Menghitung skor akhir menggunakan Ensemble Learning (RF + XGB).
+    """
+    if df_filtered.empty:
+        return df_filtered
+
+    # Pastikan urutan fitur sama persis dengan saat training
+    feature_cols = ["ENERGI", "PROTEIN", "LEMAK", "KARBO"]
+    
+    df_ml = df_filtered.copy()
+    
+    # Handle missing values & ensure columns exist
+    for col in feature_cols:
+        if col not in df_ml.columns:
+            df_ml[col] = 0
             
-        except Exception as e:
-            print(f"[Warning ML] {e}. Fallback ke Rule-Based.")
-            
-    # Fallback
-    df_ml["S_FINAL"] = df_ml["S_RULE"]
-    return df_ml
+    X_input = df_ml[feature_cols].fillna(0)
+
+    # Prediksi RF
+    pred_rf = bundle["rf"].predict(X_input)
+    
+    # Prediksi XGBoost
+    pred_xgb = bundle["xgb"].predict(X_input)
+
+    # Ensemble: Weighted Average (50:50)
+    final_score = (0.5 * pred_rf) + (0.5 * pred_xgb)
+    
+    df_ml["S_FINAL"] = final_score
+    
+    # Urutkan dari skor TERTINGGI (Descending) -> Kualitas Terbaik
+    return df_ml.sort_values("S_FINAL", ascending=False)
